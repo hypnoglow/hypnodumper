@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# Perform hot backup of remote MySQL database.
+
+check_variables_defined() {
+    if [ -z "$remote_user" ] || [ -z "$remote_host" ] ; then
+        _error "Remote user and/or host are not specified!"
+        exit 1
+    fi
+
+    if [ -z "$mysql_user" ] || [ -z "$mysql_pass" ] || [ -z "$mysql_db" ] ; then
+        _error "MySQL user and/or password and/or db are not specified!"
+        exit 1
+    fi
+
+    if [ -z "$project" ] ; then
+        _error "Project name is not specified!"
+        exit 1
+    fi
+
+    if [ -z "$remote_dir" ] || [ -z "$destination_dir" ] ; then
+        _error "Remote and/or local directories are not specified!"
+        exit 1
+    fi
+}
+
+ssh_command() {
+    ssh "$remote_user@$remote_host" "$@"
+    check_error $?
+}
+
+check_error() {
+    if [ $1 -ne 0 ] ; then
+        _error "Something went wrong, cannot continue dump process."
+        exit 1
+    fi
+}
+
+# Include library with common stuff
+. lib/func.sh
+
+if [ -z "$1" ] ; then
+    _error "Config file is not specified!"
+    exit 1
+fi
+
+. lib/conf_reader.sh
+
+conf_read "$1"
+
+check_variables_defined
+
+curr_date=$( date '+%Y-%m-%d_%H-%M-%S' )
+remote_tmp_dir="$remote_dir/$project/mysql_dumps/$curr_date/"
+tarball_name="${project}_mysql-dump_${curr_date}.tar.gz"
+
+_info "Execute commands on $remote_host:"
+ssh_command /usr/bin/env bash << EOF
+    echo "... Create tmp dir"
+    mkdir -p "$remote_tmp_dir"
+    cd "$remote_tmp_dir"
+
+    echo "... Dump database \"$mysql_db\""
+    mysqldump -u "$mysql_user" -p"$mysql_pass" "$mysql_db" --default-character-set="$mysql_charset" > "$mysql_db".sql
+
+    echo "... Create tarball $tarball_name"
+    tar -czf "$tarball_name" *
+EOF
+
+_info "... Copy tarball from remote $host"
+scp "$remote_user@$remote_host:$remote_tmp_dir/$tarball_name" "$destination_dir"
+check_error $?
+
+ssh_command /usr/bin/env bash << EOF
+    echo "... Removing dump files from remote"
+    rm -rf "$remote_tmp_dir"
+EOF
+
+_info "Done!"
